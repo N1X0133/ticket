@@ -99,7 +99,8 @@ class TicketButton(View):
         
         ticket_status[ticket_channel.id] = {
             "status": "waiting",
-            "author_id": interaction.user.id
+            "author_id": interaction.user.id,
+            "channel_name": channel_name
         }
         
         embed = discord.Embed(
@@ -148,20 +149,16 @@ class TicketControlButtons(View):
 
     @discord.ui.button(label="🔒 Закрыть жалобу", style=discord.ButtonStyle.red, custom_id="close_ticket")
     async def close_ticket(self, interaction: discord.Interaction, button: Button):
-        # Проверка что нажал автор
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Только автор жалобы может её закрыть!", ephemeral=True)
+            await interaction.response.send_message("❌ Только автор жалобы может её закрыть!\n\nby Ilya Vetrov", ephemeral=True)
             return
         
-        # Проверка статуса
         if self.channel_id in ticket_status and ticket_status[self.channel_id].get("status") == "review":
-            await interaction.response.send_message("❌ Жалоба уже на рассмотрении! Вы не можете её закрыть.", ephemeral=True)
+            await interaction.response.send_message("❌ Жалоба уже на рассмотрении! Вы не можете её закрыть.\n\nby Ilya Vetrov", ephemeral=True)
             return
         
-        # Отвечаем сразу, чтобы не было ошибки
-        await interaction.response.send_message("🔒 Жалоба будет закрыта через 3 секунды...", ephemeral=True)
+        await interaction.response.send_message("🔒 Жалоба будет закрыта через 3 секунды...\n\nby Ilya Vetrov", ephemeral=True)
         
-        # Сохраняем лог
         os.makedirs("complaint_logs", exist_ok=True)
         log_file = f"complaint_logs/{interaction.channel.name}.txt"
         
@@ -179,7 +176,6 @@ class TicketControlButtons(View):
         
         await asyncio.sleep(3)
         
-        # Удаляем канал
         try:
             if self.channel_id in ticket_status:
                 del ticket_status[self.channel_id]
@@ -189,19 +185,18 @@ class TicketControlButtons(View):
 
     @discord.ui.button(label="📋 На рассмотрении", style=discord.ButtonStyle.primary, custom_id="review_ticket")
     async def review_ticket(self, interaction: discord.Interaction, button: Button):
-        # Только сотрудники
         if not check_roles(interaction):
             await interaction.response.send_message("❌ Только сотрудники могут перевести жалобу в режим рассмотрения!\n\nby Ilya Vetrov", ephemeral=True)
             return
         
         if self.channel_id in ticket_status and ticket_status[self.channel_id].get("status") == "review":
-            await interaction.response.send_message("ℹ️ Эта жалоба уже на рассмотрении!", ephemeral=True)
+            await interaction.response.send_message("ℹ️ Эта жалоба уже на рассмотрении!\n\nby Ilya Vetrov", ephemeral=True)
             return
         
-        # Обновляем статус
         ticket_status[self.channel_id] = {
             "status": "review",
-            "author_id": self.author_id
+            "author_id": self.author_id,
+            "channel_name": interaction.channel.name
         }
         
         embed = discord.Embed(
@@ -215,11 +210,8 @@ class TicketControlButtons(View):
         )
         embed.set_footer(text="by Ilya Vetrov")
         
-        # Отправляем новое сообщение и удаляем старые кнопки
         await interaction.response.send_message("✅ Жалоба переведена в статус «На рассмотрении»\n\nby Ilya Vetrov", ephemeral=True)
         await interaction.channel.send(embed=embed, view=StaffCloseButton(self.channel_id))
-        
-        # Удаляем старые кнопки
         await interaction.channel.purge(limit=1)
 
 # ========== КНОПКА ЗАКРЫТИЯ ДЛЯ СОТРУДНИКОВ ==========
@@ -230,15 +222,12 @@ class StaffCloseButton(View):
 
     @discord.ui.button(label="🔒 Закрыть жалобу (сотрудник)", style=discord.ButtonStyle.red, custom_id="staff_close")
     async def staff_close(self, interaction: discord.Interaction, button: Button):
-        # Только сотрудники
         if not check_roles(interaction):
             await interaction.response.send_message("❌ Только сотрудники могут закрыть жалобу!\n\nby Ilya Vetrov", ephemeral=True)
             return
         
-        # Отвечаем сразу
         await interaction.response.send_message("🔒 Жалоба будет закрыта через 3 секунды...\n\nby Ilya Vetrov", ephemeral=True)
         
-        # Сохраняем лог
         os.makedirs("complaint_logs", exist_ok=True)
         log_file = f"complaint_logs/{interaction.channel.name}.txt"
         
@@ -256,7 +245,6 @@ class StaffCloseButton(View):
         
         await asyncio.sleep(3)
         
-        # Удаляем канал
         try:
             if self.channel_id in ticket_status:
                 del ticket_status[self.channel_id]
@@ -265,12 +253,13 @@ class StaffCloseButton(View):
             logger.error(f"Ошибка удаления канала: {e}")
 
 # ========== СЛЭШ-КОМАНДЫ ==========
+
 @bot.tree.command(name="setup", description="🔧 Настройка системы жалоб (админ)")
 @app_commands.default_permissions(administrator=True)
 async def setup(interaction: discord.Interaction):
     channel = interaction.guild.get_channel(PANEL_CHANNEL_ID)
     if not channel:
-        await interaction.response.send_message(f"❌ Канал {PANEL_CHANNEL_ID} не найден!", ephemeral=True)
+        await interaction.response.send_message(f"❌ Канал {PANEL_CHANNEL_ID} не найден!\n\nby Ilya Vetrov", ephemeral=True)
         return
     
     embed = discord.Embed(
@@ -301,25 +290,103 @@ async def setup(interaction: discord.Interaction):
     await channel.send(embed=embed, view=TicketButton(bot))
     await interaction.response.send_message(f"✅ Панель отправлена в канал {channel.mention}\n\nby Ilya Vetrov", ephemeral=True)
 
+@bot.tree.command(name="force_close", description="⚠️ ПРИНУДИТЕЛЬНО закрыть любой тикет (админ/сотрудник)")
+@app_commands.describe(channel_id="ID канала с жалобой (например, 123456789012345678)")
+async def force_close(interaction: discord.Interaction, channel_id: str = None):
+    """Принудительное закрытие тикета (на всякий случай)"""
+    
+    # Проверка прав
+    if not check_roles(interaction):
+        await interaction.response.send_message("❌ У вас нет прав для использования этой команды!\n\nby Ilya Vetrov", ephemeral=True)
+        return
+    
+    # Если не указан ID, показываем список активных тикетов
+    if not channel_id:
+        active_tickets = []
+        for cid, data in ticket_status.items():
+            channel = interaction.guild.get_channel(cid)
+            if channel:
+                active_tickets.append(f"📄 `{cid}` - {channel.name} (автор: <@{data.get('author_id')}>)")
+        
+        if not active_tickets:
+            await interaction.response.send_message("📭 Нет активных тикетов.\n\nby Ilya Vetrov", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="⚠️ Принудительное закрытие тикета",
+            description="Используйте: `/force_close ID_канала`\n\n**Активные тикеты:**\n" + "\n".join(active_tickets),
+            color=discord.Color.orange()
+        )
+        embed.set_footer(text="by Ilya Vetrov")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    # Пытаемся закрыть указанный канал
+    try:
+        channel_id_int = int(channel_id)
+        channel = interaction.guild.get_channel(channel_id_int)
+        
+        if not channel:
+            await interaction.response.send_message(f"❌ Канал с ID `{channel_id}` не найден!\n\nby Ilya Vetrov", ephemeral=True)
+            return
+        
+        if not channel.name.startswith("жалоба-"):
+            await interaction.response.send_message(f"❌ Канал `{channel.name}` не является каналом жалобы!\n\nby Ilya Vetrov", ephemeral=True)
+            return
+        
+        # Отвечаем сразу
+        await interaction.response.send_message(f"⚠️ Принудительное закрытие канала `{channel.name}` через 3 секунды...\n\nby Ilya Vetrov", ephemeral=True)
+        
+        # Сохраняем лог
+        os.makedirs("complaint_logs", exist_ok=True)
+        log_file = f"complaint_logs/{channel.name}.txt"
+        
+        try:
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write(f"Лог жалобы: {channel.name}\n")
+                f.write(f"Дата принудительного закрытия: {datetime.utcnow()}\n")
+                f.write(f"Принудительно закрыл: {interaction.user}\n")
+                f.write("by Ilya Vetrov\n")
+                f.write("="*50 + "\n")
+                async for msg in channel.history(limit=500, oldest_first=True):
+                    f.write(f"{msg.author} [{msg.created_at}]: {msg.content}\n")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения лога: {e}")
+        
+        await asyncio.sleep(3)
+        
+        # Удаляем канал
+        if channel.id in ticket_status:
+            del ticket_status[channel.id]
+        await channel.delete()
+        
+        # Отправляем подтверждение в лог-канал (если настроен)
+        logger.info(f"Принудительно закрыт тикет {channel.name} пользователем {interaction.user}")
+        
+    except ValueError:
+        await interaction.response.send_message(f"❌ Неверный формат ID. Введите числовой ID канала.\n\nby Ilya Vetrov", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Ошибка при закрытии: {str(e)}\n\nby Ilya Vetrov", ephemeral=True)
+
 @bot.tree.command(name="complaint_log", description="📄 Получить лог закрытой жалобы")
-@app_commands.describe(channel_name="Название канала жалобы")
+@app_commands.describe(channel_name="Название канала жалобы (например, жалоба-иван)")
 async def complaint_log(interaction: discord.Interaction, channel_name: str = None):
     if not check_roles(interaction):
         await interaction.response.send_message("❌ Нет прав!\n\nby Ilya Vetrov", ephemeral=True)
         return
     
     if not channel_name:
-        await interaction.response.send_message("❌ Укажите название канала", ephemeral=True)
+        await interaction.response.send_message("❌ Укажите название канала\n\nby Ilya Vetrov", ephemeral=True)
         return
     
     log_path = f"complaint_logs/{channel_name}.txt"
     if not os.path.exists(log_path):
-        await interaction.response.send_message(f"❌ Лог не найден", ephemeral=True)
+        await interaction.response.send_message(f"❌ Лог для `{channel_name}` не найден.\n\nby Ilya Vetrov", ephemeral=True)
         return
     
     await interaction.response.send_message(file=discord.File(log_path))
 
-@bot.tree.command(name="closed_list", description="📋 Список закрытых жалоб")
+@bot.tree.command(name="closed_list", description="📋 Список всех закрытых жалоб")
 async def closed_list(interaction: discord.Interaction):
     if not check_roles(interaction):
         await interaction.response.send_message("❌ Нет прав!\n\nby Ilya Vetrov", ephemeral=True)
@@ -332,7 +399,37 @@ async def closed_list(interaction: discord.Interaction):
         await interaction.response.send_message("📭 Нет закрытых жалоб.\n\nby Ilya Vetrov", ephemeral=True)
         return
     
-    embed = discord.Embed(title="📋 Список закрытых жалоб", description="\n".join([f"📄 `{f}`" for f in files]), color=discord.Color.blue())
+    embed = discord.Embed(
+        title="📋 Список закрытых жалоб",
+        description="\n".join([f"📄 `{f}`" for f in files]),
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="by Ilya Vetrov")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="active_list", description="📋 Список активных (открытых) жалоб")
+async def active_list(interaction: discord.Interaction):
+    """Показывает список активных тикетов"""
+    if not check_roles(interaction):
+        await interaction.response.send_message("❌ Нет прав!\n\nby Ilya Vetrov", ephemeral=True)
+        return
+    
+    active_tickets = []
+    for cid, data in ticket_status.items():
+        channel = interaction.guild.get_channel(cid)
+        if channel:
+            status_text = "🟢 ОЖИДАЕТ" if data.get("status") == "waiting" else "🟡 НА РАССМОТРЕНИИ"
+            active_tickets.append(f"📄 `{channel.name}` - {status_text} (автор: <@{data.get('author_id')}>)")
+    
+    if not active_tickets:
+        await interaction.response.send_message("📭 Нет активных жалоб.\n\nby Ilya Vetrov", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Список активных жалоб",
+        description="\n".join(active_tickets),
+        color=discord.Color.green()
+    )
     embed.set_footer(text="by Ilya Vetrov")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -340,7 +437,41 @@ async def closed_list(interaction: discord.Interaction):
 async def info(interaction: discord.Interaction):
     embed = discord.Embed(
         title="ℹ️ О боте",
-        description="**Система подачи жалоб в Прокуратуру Нижегородской области**\n\n👨‍💻 **Разработчик:** Ilya Vetrov\n🛡️ **Версия:** 1.0",
+        description=(
+            "**Система подачи жалоб в Прокуратуру Нижегородской области**\n\n"
+            "👨‍💻 **Разработчик:** Ilya Vetrov\n"
+            "🛡️ **Версия:** 2.0\n\n"
+            "**Команды:**\n"
+            "• `/setup` - Настройка панели (админ)\n"
+            "• `/force_close` - Принудительно закрыть тикет\n"
+            "• `/active_list` - Список активных тикетов\n"
+            "• `/closed_list` - Список закрытых тикетов\n"
+            "• `/complaint_log` - Лог закрытого тикета\n"
+            "• `/check_roles` - Проверка ролей\n"
+            "• `/info` - Эта информация"
+        ),
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="by Ilya Vetrov")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="check_roles", description="👥 Проверить какие роли видят тикеты")
+async def check_roles_cmd(interaction: discord.Interaction):
+    if not check_roles(interaction):
+        await interaction.response.send_message("❌ Нет прав!\n\nby Ilya Vetrov", ephemeral=True)
+        return
+    
+    roles_list = []
+    for role_id in ROLE_IDS:
+        role = interaction.guild.get_role(role_id)
+        if role:
+            roles_list.append(f"✅ {role.name} (`{role_id}`)")
+        else:
+            roles_list.append(f"❌ Роль не найдена (`{role_id}`)")
+    
+    embed = discord.Embed(
+        title="👥 Роли с доступом к тикетам",
+        description="\n".join(roles_list),
         color=discord.Color.blue()
     )
     embed.set_footer(text="by Ilya Vetrov")
@@ -352,6 +483,7 @@ async def on_ready():
     await bot.change_presence(activity=discord.Game(name="by Ilya Vetrov"))
     print(f"✅ Бот {bot.user} готов!")
     print(f"👨‍💻 by Ilya Vetrov")
+    print(f"🔧 Доступные команды: /setup, /force_close, /active_list, /closed_list, /complaint_log, /check_roles, /info")
 
 if __name__ == "__main__":
     try:
