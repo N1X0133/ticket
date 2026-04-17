@@ -24,12 +24,21 @@ intents.members = True
 PANEL_CHANNEL_ID = 1494790569560506408
 TICKET_CATEGORY_ID = 1494790799827664956
 
-# ВАШИ РОЛИ (которые будут видеть все тикеты)
+# ВАШИ РОЛИ (которые будут видеть все тикеты и использовать команды)
 ROLE_IDS = [
     1475470962379067392,  # Роль 1
     1491509114034192384,  # Роль 2
     1491508543432687666   # Роль 3
 ]
+
+def check_roles(interaction: discord.Interaction) -> bool:
+    """Проверяет, есть ли у пользователя одна из разрешённых ролей"""
+    for role_id in ROLE_IDS:
+        role = interaction.user.get_role(role_id)
+        if role:
+            return True
+    # Также проверяем права администратора
+    return interaction.user.guild_permissions.administrator()
 
 class TicketBot(commands.Bot):
     def __init__(self):
@@ -78,18 +87,13 @@ class TicketButton(View):
         
         # НАСТРОЙКА ПРАВ ДОСТУПА
         overwrites = {
-            # @everyone - НЕ ВИДИТ канал
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            
-            # Пользователь - ВИДИТ свой канал
             interaction.user: discord.PermissionOverwrite(
                 read_messages=True, 
                 send_messages=True, 
                 attach_files=True,
                 read_message_history=True
             ),
-            
-            # Бот - ВИДИТ
             interaction.guild.me: discord.PermissionOverwrite(
                 read_messages=True, 
                 send_messages=True
@@ -106,9 +110,6 @@ class TicketButton(View):
                     read_message_history=True,
                     attach_files=True
                 )
-                logger.info(f"Добавлена роль {role.name} (ID: {role_id}) в канал {channel_name}")
-            else:
-                logger.warning(f"Роль с ID {role_id} не найдена на сервере!")
         
         # Создаём канал
         ticket_channel = await category.create_text_channel(channel_name, overwrites=overwrites)
@@ -180,11 +181,12 @@ class CloseTicketButton(View):
         await interaction.channel.delete()
         logger.info(f"Жалоба {interaction.channel.name} закрыта")
 
-# ---------- СЛЭШ-КОМАНДЫ ----------
+# ---------- СЛЭШ-КОМАНДЫ (С ПРОВЕРКОЙ РОЛЕЙ) ----------
+
 @bot.tree.command(name="setup", description="🔧 Настройка системы жалоб (админ)")
 @app_commands.default_permissions(administrator=True)
 async def setup(interaction: discord.Interaction):
-    """Отправляет панель с кнопкой в настроенный канал"""
+    """Отправляет панель с кнопкой в настроенный канал (только админ)"""
     channel = interaction.guild.get_channel(PANEL_CHANNEL_ID)
     if not channel:
         await interaction.response.send_message(f"❌ Канал {PANEL_CHANNEL_ID} не найден!", ephemeral=True)
@@ -217,18 +219,76 @@ async def setup(interaction: discord.Interaction):
     await channel.send(embed=embed, view=TicketButton(bot))
     await interaction.response.send_message(f"✅ Панель отправлена в канал {channel.mention}", ephemeral=True)
 
-@bot.tree.command(name="complaint_log", description="📄 Получить лог закрытой жалобы (админ)")
-@app_commands.default_permissions(administrator=True)
+# КОМАНДА ДЛЯ ПРОСМОТРА ЛОГА (доступна вашим ролям)
+@bot.tree.command(name="complaint_log", description="📄 Получить лог закрытой жалобы")
 @app_commands.describe(channel_name="Название канала жалобы (например, жалоба-иван)")
 async def complaint_log(interaction: discord.Interaction, channel_name: str = None):
+    """Просмотр лога закрытой жалобы (доступно вашим ролям)"""
+    # Проверяем права
+    if not check_roles(interaction):
+        await interaction.response.send_message("❌ У вас нет прав для использования этой команды!", ephemeral=True)
+        return
+    
     if not channel_name:
         await interaction.response.send_message("❌ Укажите название канала жалобы, например: `жалоба-иван`", ephemeral=True)
         return
+    
     log_path = f"complaint_logs/{channel_name}.txt"
     if not os.path.exists(log_path):
         await interaction.response.send_message(f"❌ Лог для канала `{channel_name}` не найден.", ephemeral=True)
         return
+    
     await interaction.response.send_message(file=discord.File(log_path))
+
+# КОМАНДА ДЛЯ СПИСКА ЗАКРЫТЫХ (доступна вашим ролям)
+@bot.tree.command(name="closed_list", description="📋 Список всех закрытых жалоб")
+async def closed_list(interaction: discord.Interaction):
+    """Показывает список всех закрытых тикетов (доступно вашим ролям)"""
+    # Проверяем права
+    if not check_roles(interaction):
+        await interaction.response.send_message("❌ У вас нет прав для использования этой команды!", ephemeral=True)
+        return
+    
+    os.makedirs("complaint_logs", exist_ok=True)
+    
+    files = [f.replace(".txt", "") for f in os.listdir("complaint_logs") if f.endswith(".txt")]
+    
+    if not files:
+        await interaction.response.send_message("📭 Нет закрытых жалоб.", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Список закрытых жалоб",
+        description="\n".join([f"📄 `{f}`" for f in files]),
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="Используйте /complaint_log <название> для просмотра")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# КОМАНДА ДЛЯ ПРОВЕРКИ РОЛЕЙ (доступна вашим ролям)
+@bot.tree.command(name="check_roles", description="👥 Проверить какие роли видят тикеты")
+async def check_roles_cmd(interaction: discord.Interaction):
+    """Проверяет, какие роли настроены для просмотра тикетов (доступно вашим ролям)"""
+    # Проверяем права
+    if not check_roles(interaction):
+        await interaction.response.send_message("❌ У вас нет прав для использования этой команды!", ephemeral=True)
+        return
+    
+    roles_list = []
+    for role_id in ROLE_IDS:
+        role = interaction.guild.get_role(role_id)
+        if role:
+            roles_list.append(f"✅ {role.name} (`{role_id}`)")
+        else:
+            roles_list.append(f"❌ Роль не найдена (`{role_id}`)")
+    
+    embed = discord.Embed(
+        title="👥 Роли с доступом к тикетам",
+        description="\n".join(roles_list),
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="reload_panel", description="🔄 Пересоздать панель с формой жалобы (админ)")
 @app_commands.default_permissions(administrator=True)
@@ -264,25 +324,6 @@ async def reload_panel(interaction: discord.Interaction):
     
     await channel.send(embed=embed, view=TicketButton(bot))
     await interaction.response.send_message(f"✅ Панель пересоздана в канале {channel.mention}", ephemeral=True)
-
-@bot.tree.command(name="check_roles", description="👥 Проверить какие роли видят тикеты (админ)")
-@app_commands.default_permissions(administrator=True)
-async def check_roles(interaction: discord.Interaction):
-    """Проверяет, какие роли настроены для просмотра тикетов"""
-    roles_list = []
-    for role_id in ROLE_IDS:
-        role = interaction.guild.get_role(role_id)
-        if role:
-            roles_list.append(f"✅ {role.name} (`{role_id}`)")
-        else:
-            roles_list.append(f"❌ Роль не найдена (`{role_id}`)")
-    
-    embed = discord.Embed(
-        title="👥 Роли с доступом к тикетам",
-        description="\n".join(roles_list),
-        color=discord.Color.blue()
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ---------- ЗАПУСК ----------
 @bot.event
