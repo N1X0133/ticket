@@ -24,6 +24,13 @@ intents.members = True
 PANEL_CHANNEL_ID = 1494790569560506408
 TICKET_CATEGORY_ID = 1494790799827664956
 
+# ВАШИ РОЛИ (которые будут видеть все тикеты)
+ROLE_IDS = [
+    1475470962379067392,  # Роль 1
+    1491509114034192384,  # Роль 2
+    1491508543432687666   # Роль 3
+]
+
 class TicketBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
@@ -49,7 +56,7 @@ class TicketBot(commands.Bot):
 
 bot = TicketBot()
 
-# ---------- КНОПКА СОЗДАНИЯ ТИКЕТА (БЕЗ ОКНА) ----------
+# ---------- КНОПКА СОЗДАНИЯ ТИКЕТА ----------
 class TicketButton(View):
     def __init__(self, bot_instance):
         super().__init__(timeout=None)
@@ -69,15 +76,39 @@ class TicketButton(View):
             await interaction.response.send_message("❌ У вас уже есть открытая жалоба! Дождитесь рассмотрения.", ephemeral=True)
             return
         
-        # Права доступа
+        # НАСТРОЙКА ПРАВ ДОСТУПА
         overwrites = {
+            # @everyone - НЕ ВИДИТ канал
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True),
-            interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            
+            # Пользователь - ВИДИТ свой канал
+            interaction.user: discord.PermissionOverwrite(
+                read_messages=True, 
+                send_messages=True, 
+                attach_files=True,
+                read_message_history=True
+            ),
+            
+            # Бот - ВИДИТ
+            interaction.guild.me: discord.PermissionOverwrite(
+                read_messages=True, 
+                send_messages=True
+            )
         }
-        admin_role = discord.utils.get(interaction.guild.roles, name="Admin")
-        if admin_role:
-            overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        
+        # ДОБАВЛЯЕМ ВАШИ РОЛИ (будут видеть ВСЕ тикеты)
+        for role_id in ROLE_IDS:
+            role = interaction.guild.get_role(role_id)
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(
+                    read_messages=True,
+                    send_messages=True,
+                    read_message_history=True,
+                    attach_files=True
+                )
+                logger.info(f"Добавлена роль {role.name} (ID: {role_id}) в канал {channel_name}")
+            else:
+                logger.warning(f"Роль с ID {role_id} не найдена на сервере!")
         
         # Создаём канал
         ticket_channel = await category.create_text_channel(channel_name, overwrites=overwrites)
@@ -234,12 +265,32 @@ async def reload_panel(interaction: discord.Interaction):
     await channel.send(embed=embed, view=TicketButton(bot))
     await interaction.response.send_message(f"✅ Панель пересоздана в канале {channel.mention}", ephemeral=True)
 
+@bot.tree.command(name="check_roles", description="👥 Проверить какие роли видят тикеты (админ)")
+@app_commands.default_permissions(administrator=True)
+async def check_roles(interaction: discord.Interaction):
+    """Проверяет, какие роли настроены для просмотра тикетов"""
+    roles_list = []
+    for role_id in ROLE_IDS:
+        role = interaction.guild.get_role(role_id)
+        if role:
+            roles_list.append(f"✅ {role.name} (`{role_id}`)")
+        else:
+            roles_list.append(f"❌ Роль не найдена (`{role_id}`)")
+    
+    embed = discord.Embed(
+        title="👥 Роли с доступом к тикетам",
+        description="\n".join(roles_list),
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # ---------- ЗАПУСК ----------
 @bot.event
 async def on_ready():
     logger.info(f"✅ Бот {bot.user} запущен!")
     await bot.change_presence(activity=discord.Game(name="/setup - подача жалоб"))
     print(f"Бот {bot.user} готов. Используйте /setup")
+    print(f"Настроены роли с ID: {ROLE_IDS}")
 
 if __name__ == "__main__":
     try:
