@@ -4,53 +4,63 @@ import logging
 from datetime import datetime
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, View
 
-# Настройка логирования (полезно для отладки на хостинге)
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Получаем токен из переменной окружения, которую вы создадите на хостинге
 TOKEN = os.environ.get("DISCORD_TOKEN")
 if not TOKEN:
-    raise ValueError("Переменная окружения DISCORD_TOKEN не установлена на хостинге!")
+    raise ValueError("Переменная окружения DISCORD_TOKEN не установлена!")
 
-# Включаем необходимые интенты
+# Интенты
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+class TicketBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.synced = False  # флаг синхронизации команд
 
-# ---------- Кнопка для создания тикета ----------
+    async def setup_hook(self):
+        # Синхронизация слэш-команд при запуске
+        await self.tree.sync()
+        logger.info("Слэш-команды синхронизированы")
+        # Добавляем постоянные кнопки
+        self.add_view(TicketButton())
+        self.add_view(CloseTicketButton())
+
+bot = TicketBot()
+
+# ---------- Кнопка создания тикета ----------
 class TicketButton(View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="📩 Создать тикет", style=discord.ButtonStyle.green, custom_id="ticket_create")
     async def create_ticket(self, interaction: discord.Interaction, button: Button):
-        # Создаём категорию "Тикеты", если её нет
+        # Категория "Тикеты"
         category = discord.utils.get(interaction.guild.categories, name="Тикеты")
         if not category:
             category = await interaction.guild.create_category("Тикеты")
             logger.info("Создана категория 'Тикеты'")
 
-        # Название канала: ticket-username
-        channel_name = f"ticket-{interaction.user.name.lower()}"
-        # Проверяем, нет ли уже открытого тикета у этого пользователя
+        channel_name = f"тикет-{interaction.user.name.lower()}"
         existing = discord.utils.get(interaction.guild.text_channels, name=channel_name)
         if existing:
-            await interaction.response.send_message("У вас уже есть открытый тикет!", ephemeral=True)
+            await interaction.response.send_message("❌ У вас уже есть открытый тикет!", ephemeral=True)
             return
 
-        # Создаём текстовый канал
+        # Права доступа
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
-        # Добавим роль администраторов (если есть роль "Admin" или "Support")
         admin_role = discord.utils.get(interaction.guild.roles, name="Admin")
         if admin_role:
             overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
@@ -58,15 +68,14 @@ class TicketButton(View):
         ticket_channel = await category.create_text_channel(channel_name, overwrites=overwrites)
         logger.info(f"Создан канал {channel_name} для {interaction.user}")
 
-        # Отправляем приветствие в тикет
         embed = discord.Embed(
             title="📌 Тикет создан",
-            description=f"Здравствуйте, {interaction.user.mention}!\nОпишите вашу проблему. Поддержка скоро ответит.",
+            description=f"Здравствуйте, {interaction.user.mention}!\nОпишите вашу проблему. Сотрудники поддержки ответят в этом канале.",
             color=discord.Color.green(),
             timestamp=datetime.utcnow()
         )
         await ticket_channel.send(embed=embed, view=CloseTicketButton())
-        await interaction.response.send_message(f"Тикет создан: {ticket_channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"✅ Тикет создан: {ticket_channel.mention}", ephemeral=True)
 
 # ---------- Кнопка закрытия тикета ----------
 class CloseTicketButton(View):
@@ -75,14 +84,14 @@ class CloseTicketButton(View):
 
     @discord.ui.button(label="🔒 Закрыть тикет", style=discord.ButtonStyle.red, custom_id="ticket_close")
     async def close_ticket(self, interaction: discord.Interaction, button: Button):
-        # Подтверждение закрытия
-        await interaction.response.send_message("Тикет будет закрыт через 5 секунд...", ephemeral=True)
+        await interaction.response.send_message("🔒 Тикет будет закрыт через 5 секунд...", ephemeral=True)
         await asyncio.sleep(5)
-        # Сохраняем историю сообщений в лог-файл (опционально)
+
+        # Сохраняем лог
         os.makedirs("ticket_logs", exist_ok=True)
         log_file = f"ticket_logs/{interaction.channel.name}.txt"
         with open(log_file, "w", encoding="utf-8") as f:
-            f.write(f"Лог тикета {interaction.channel.name}\n")
+            f.write(f"Лог тикета: {interaction.channel.name}\n")
             f.write(f"Дата закрытия: {datetime.utcnow()}\n")
             f.write("="*50 + "\n")
             async for msg in interaction.channel.history(limit=200, oldest_first=True):
@@ -90,42 +99,39 @@ class CloseTicketButton(View):
         logger.info(f"Тикет {interaction.channel.name} закрыт, лог сохранён")
         await interaction.channel.delete()
 
-# ---------- Команды бота ----------
-@bot.event
-async def on_ready():
-    logger.info(f"Бот {bot.user} успешно запущен на хостинге!")
-    # Регистрируем постоянные кнопки (чтобы они работали после перезапуска)
-    bot.add_view(TicketButton())
-    bot.add_view(CloseTicketButton())
-    # Устанавливаем статус "Играет в помощь"
-    await bot.change_presence(activity=discord.Game(name="!ticket_panel"))
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def ticket_panel(ctx):
-    """Создаёт панель с кнопкой для открытия тикета (только админ)"""
+# ---------- Слэш-команды ----------
+@bot.tree.command(name="ticket_panel", description="Создать панель с кнопкой для открытия тикетов (админ)")
+@app_commands.default_permissions(administrator=True)
+async def ticket_panel(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🎫 Система поддержки",
-        description="Нажмите на кнопку ниже, чтобы создать тикет. Наши операторы свяжутся с вами в этом канале.",
+        description="Нажмите на кнопку ниже, чтобы создать тикет. Операторы свяжутся с вами в этом канале.",
         color=discord.Color.blue()
     )
-    await ctx.send(embed=embed, view=TicketButton())
-    await ctx.message.delete()  # удаляем команду, чтобы не засорять чат
+    await interaction.response.send_message(embed=embed, view=TicketButton())
+    await interaction.delete_original_response()  # удаляем сообщение с командой, оставляем только панель
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def ticket_log(ctx, channel_name: str = None):
-    """Отправить лог закрытого тикета (админ)"""
+@bot.tree.command(name="ticket_log", description="Получить лог закрытого тикета (админ)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel_name="Название канала тикета (например, тикет-пользователь)")
+async def ticket_log(interaction: discord.Interaction, channel_name: str = None):
     if not channel_name:
-        await ctx.send("Укажите имя канала тикета, например `!ticket_log ticket-username`")
+        await interaction.response.send_message("❌ Укажите название канала тикета, например: `тикет-иван`", ephemeral=True)
         return
     log_path = f"ticket_logs/{channel_name}.txt"
     if not os.path.exists(log_path):
-        await ctx.send(f"Лог для канала `{channel_name}` не найден.")
+        await interaction.response.send_message(f"❌ Лог для канала `{channel_name}` не найден.", ephemeral=True)
         return
-    await ctx.send(file=discord.File(log_path))
+    await interaction.response.send_message(file=discord.File(log_path))
 
-# ---------- Запуск бота ----------
+# ---------- Событие готовности ----------
+@bot.event
+async def on_ready():
+    logger.info(f"✅ Бот {bot.user} запущен на хостинге!")
+    await bot.change_presence(activity=discord.Game(name="/ticket_panel"))
+    print(f"Бот {bot.user} готов. Используйте слэш-команды /ticket_panel и /ticket_log")
+
+# ---------- Запуск ----------
 if __name__ == "__main__":
     try:
         bot.run(TOKEN)
