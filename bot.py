@@ -64,7 +64,7 @@ class TicketBot(commands.Bot):
 
 bot = TicketBot()
 
-# ========== КНОПКА СОЗДАНИЯ ТИКЕТА ==========
+# ========== КНОПКА СОЗДАНИЯ ТИКЕТА (ИСПРАВЛЕНА) ==========
 class TicketButton(View):
     def __init__(self, bot_instance):
         super().__init__(timeout=None)
@@ -72,73 +72,96 @@ class TicketButton(View):
 
     @discord.ui.button(label="📩 Подать жалобу в Прокуратуру", style=discord.ButtonStyle.green, custom_id="ticket_create")
     async def create_ticket(self, interaction: discord.Interaction, button: Button):
+        # СРАЗУ ОТВЕЧАЕМ, ЧТОБЫ НЕ БЫЛО ТАЙМАУТА
         await interaction.response.defer(ephemeral=True)
         
-        category = interaction.guild.get_channel(TICKET_CATEGORY_ID)
-        if not category:
-            category = await interaction.guild.create_category("Жалобы в Прокуратуру")
-        
-        channel_name = f"жалоба-{interaction.user.name.lower()}"
-        existing = discord.utils.get(interaction.guild.text_channels, name=channel_name)
-        if existing:
-            await interaction.followup.send("❌ У вас уже есть открытая жалоба!", ephemeral=True)
-            return
-        
-        overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, read_message_history=True),
-            interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-        
-        for role_id in ROLE_IDS:
-            role = interaction.guild.get_role(role_id)
-            if role:
-                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
-        
-        ticket_channel = await category.create_text_channel(channel_name, overwrites=overwrites)
-        
-        ticket_status[ticket_channel.id] = {
-            "status": "waiting",
-            "author_id": interaction.user.id,
-            "channel_name": channel_name
-        }
-        
-        embed = discord.Embed(
-            title="⚖️ Прокуратура Нижегородской области",
-            description=(
-                "**Форма подачи жалобы:**\n\n"
-                "**Жалоба в Прокуратуру № XXX**\n\n"
-                "**Кому:** Прокуратуре Нижегородской области\n"
-                f"**От кого:** {interaction.user.name}\n\n"
-                f"**Я, гражданин Нижегородской области ({interaction.user.name}), подаю жалобу в прокуратуру на гражданина**\n"
-                "(напишите ФИО / Удостоверение / Нашивку / Неизвестного)\n\n"
-                "**Подробное описание ситуации:**\n"
-                "(напишите здесь подробное описание)\n\n"
-                "**Доказательства, подтверждающие правонарушение**\n"
-                "(на видео или скриншоте должна быть обязательно системная боди-камера, вставьте ссылку)\n\n"
-                "**Дата и время нарушения:**\n"
-                "(пример: 29.05.2025, 18:30)\n\n"
-                "**К жалобе в прокуратуру прилагаю:**\n"
-                "Копию паспорта: (вставьте ссылку)\n\n"
-                "**Контактные данные:**\n"
-                "(номер телефона; почта; Discord)\n\n"
-                "**Дата:**\n"
-                f"(пример: {datetime.now().strftime('%d.%m.%Y')})\n"
-                "**Подпись:**\n"
-                "(ваша подпись)\n\n"
-                "**Статус:** 🟢 ОЖИДАЕТ РАССМОТРЕНИЯ"
-            ),
-            color=discord.Color.green()
-        )
-        embed.set_footer(text="by Ilya Vetrov")
-        
-        await ticket_channel.send(
-            f"{interaction.user.mention}, **ваша жалоба зарегистрирована!**\nЗаполните форму выше.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n**by Ilya Vetrov**",
-            view=TicketControlButtons(interaction.user.id, ticket_channel.id)
-        )
-        await ticket_channel.send(embed=embed)
-        
-        await interaction.followup.send(f"✅ Жалоба создана! Перейдите в канал {ticket_channel.mention}\n\n**by Ilya Vetrov**", ephemeral=True)
+        try:
+            # Проверка белого сервера
+            if interaction.guild.id != WHITE_SERVER_ID:
+                await interaction.followup.send("⛔ Бот работает только на официальном сервере!", ephemeral=True)
+                return
+            
+            # Получаем категорию
+            category = interaction.guild.get_channel(TICKET_CATEGORY_ID)
+            if not category:
+                category = await interaction.guild.create_category("Жалобы в Прокуратуру")
+                await interaction.followup.send("ℹ️ Категория для жалоб создана автоматически.", ephemeral=True)
+            
+            # Проверяем, нет ли уже открытого тикета
+            channel_name = f"жалоба-{interaction.user.name.lower()}"
+            existing = discord.utils.get(interaction.guild.text_channels, name=channel_name)
+            if existing:
+                await interaction.followup.send("❌ У вас уже есть открытая жалоба! Дождитесь рассмотрения.", ephemeral=True)
+                return
+            
+            # Настройка прав
+            overwrites = {
+                interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, read_message_history=True),
+                interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            
+            for role_id in ROLE_IDS:
+                role = interaction.guild.get_role(role_id)
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
+            
+            # Создаём канал
+            ticket_channel = await category.create_text_channel(channel_name, overwrites=overwrites)
+            
+            # Сохраняем статус
+            ticket_status[ticket_channel.id] = {
+                "status": "waiting",
+                "author_id": interaction.user.id,
+                "channel_name": channel_name
+            }
+            
+            # Форма жалобы
+            embed = discord.Embed(
+                title="⚖️ Прокуратура Нижегородской области",
+                description=(
+                    "**Форма подачи жалобы:**\n\n"
+                    "**Жалоба в Прокуратуру № XXX**\n\n"
+                    "**Кому:** Прокуратуре Нижегородской области\n"
+                    f"**От кого:** {interaction.user.name}\n\n"
+                    f"**Я, гражданин Нижегородской области ({interaction.user.name}), подаю жалобу в прокуратуру на гражданина**\n"
+                    "(напишите ФИО / Удостоверение / Нашивку / Неизвестного)\n\n"
+                    "**Подробное описание ситуации:**\n"
+                    "(напишите здесь подробное описание)\n\n"
+                    "**Доказательства, подтверждающие правонарушение**\n"
+                    "(на видео или скриншоте должна быть обязательно системная боди-камера, вставьте ссылку)\n\n"
+                    "**Дата и время нарушения:**\n"
+                    "(пример: 29.05.2025, 18:30)\n\n"
+                    "**К жалобе в прокуратуру прилагаю:**\n"
+                    "Копию паспорта: (вставьте ссылку)\n\n"
+                    "**Контактные данные:**\n"
+                    "(номер телефона; почта; Discord)\n\n"
+                    "**Дата:**\n"
+                    f"(пример: {datetime.now().strftime('%d.%m.%Y')})\n"
+                    "**Подпись:**\n"
+                    "(ваша подпись)\n\n"
+                    "**Статус:** 🟢 ОЖИДАЕТ РАССМОТРЕНИЯ"
+                ),
+                color=discord.Color.green()
+            )
+            embed.set_footer(text="by Ilya Vetrov")
+            
+            # Отправляем сообщения в канал
+            await ticket_channel.send(
+                f"{interaction.user.mention}, **ваша жалоба зарегистрирована!**\nЗаполните форму выше.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n**by Ilya Vetrov**",
+                view=TicketControlButtons(interaction.user.id, ticket_channel.id)
+            )
+            await ticket_channel.send(embed=embed)
+            
+            # Успешный ответ
+            await interaction.followup.send(f"✅ Жалоба создана! Перейдите в канал {ticket_channel.mention}\n\n**by Ilya Vetrov**", ephemeral=True)
+            logger.info(f"Создана жалоба {channel_name} от {interaction.user}")
+            
+        except discord.Forbidden:
+            await interaction.followup.send("❌ У бота нет прав для создания канала! Выдайте ему права `Manage Channels`.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Ошибка при создании тикета: {e}")
+            await interaction.followup.send(f"❌ Произошла ошибка: {str(e)[:100]}\n\nПожалуйста, сообщите администратору.\n\nby Ilya Vetrov", ephemeral=True)
 
 # ========== КНОПКИ УПРАВЛЕНИЯ ТИКЕТОМ ==========
 class TicketControlButtons(View):
@@ -212,7 +235,12 @@ class TicketControlButtons(View):
         
         await interaction.response.send_message("✅ Жалоба переведена в статус «На рассмотрении»\n\nby Ilya Vetrov", ephemeral=True)
         await interaction.channel.send(embed=embed, view=StaffCloseButton(self.channel_id))
-        await interaction.channel.purge(limit=1)
+        
+        # Удаляем старые кнопки
+        try:
+            await interaction.channel.purge(limit=1)
+        except:
+            pass
 
 # ========== КНОПКА ЗАКРЫТИЯ ДЛЯ СОТРУДНИКОВ ==========
 class StaffCloseButton(View):
@@ -293,14 +321,10 @@ async def setup(interaction: discord.Interaction):
 @bot.tree.command(name="force_close", description="⚠️ ПРИНУДИТЕЛЬНО закрыть любой тикет (админ/сотрудник)")
 @app_commands.describe(channel_id="ID канала с жалобой (например, 123456789012345678)")
 async def force_close(interaction: discord.Interaction, channel_id: str = None):
-    """Принудительное закрытие тикета (на всякий случай)"""
-    
-    # Проверка прав
     if not check_roles(interaction):
         await interaction.response.send_message("❌ У вас нет прав для использования этой команды!\n\nby Ilya Vetrov", ephemeral=True)
         return
     
-    # Если не указан ID, показываем список активных тикетов
     if not channel_id:
         active_tickets = []
         for cid, data in ticket_status.items():
@@ -321,7 +345,6 @@ async def force_close(interaction: discord.Interaction, channel_id: str = None):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
-    # Пытаемся закрыть указанный канал
     try:
         channel_id_int = int(channel_id)
         channel = interaction.guild.get_channel(channel_id_int)
@@ -334,10 +357,8 @@ async def force_close(interaction: discord.Interaction, channel_id: str = None):
             await interaction.response.send_message(f"❌ Канал `{channel.name}` не является каналом жалобы!\n\nby Ilya Vetrov", ephemeral=True)
             return
         
-        # Отвечаем сразу
         await interaction.response.send_message(f"⚠️ Принудительное закрытие канала `{channel.name}` через 3 секунды...\n\nby Ilya Vetrov", ephemeral=True)
         
-        # Сохраняем лог
         os.makedirs("complaint_logs", exist_ok=True)
         log_file = f"complaint_logs/{channel.name}.txt"
         
@@ -355,18 +376,14 @@ async def force_close(interaction: discord.Interaction, channel_id: str = None):
         
         await asyncio.sleep(3)
         
-        # Удаляем канал
         if channel.id in ticket_status:
             del ticket_status[channel.id]
         await channel.delete()
         
-        # Отправляем подтверждение в лог-канал (если настроен)
-        logger.info(f"Принудительно закрыт тикет {channel.name} пользователем {interaction.user}")
-        
     except ValueError:
         await interaction.response.send_message(f"❌ Неверный формат ID. Введите числовой ID канала.\n\nby Ilya Vetrov", ephemeral=True)
     except Exception as e:
-        await interaction.response.send_message(f"❌ Ошибка при закрытии: {str(e)}\n\nby Ilya Vetrov", ephemeral=True)
+        await interaction.response.send_message(f"❌ Ошибка при закрытии: {str(e)[:100]}\n\nby Ilya Vetrov", ephemeral=True)
 
 @bot.tree.command(name="complaint_log", description="📄 Получить лог закрытой жалобы")
 @app_commands.describe(channel_name="Название канала жалобы (например, жалоба-иван)")
@@ -409,7 +426,6 @@ async def closed_list(interaction: discord.Interaction):
 
 @bot.tree.command(name="active_list", description="📋 Список активных (открытых) жалоб")
 async def active_list(interaction: discord.Interaction):
-    """Показывает список активных тикетов"""
     if not check_roles(interaction):
         await interaction.response.send_message("❌ Нет прав!\n\nby Ilya Vetrov", ephemeral=True)
         return
@@ -440,7 +456,7 @@ async def info(interaction: discord.Interaction):
         description=(
             "**Система подачи жалоб в Прокуратуру Нижегородской области**\n\n"
             "👨‍💻 **Разработчик:** Ilya Vetrov\n"
-            "🛡️ **Версия:** 2.0\n\n"
+            "🛡️ **Версия:** 2.1\n\n"
             "**Команды:**\n"
             "• `/setup` - Настройка панели (админ)\n"
             "• `/force_close` - Принудительно закрыть тикет\n"
